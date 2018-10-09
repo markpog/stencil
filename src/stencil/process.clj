@@ -24,7 +24,10 @@
 (defmulti prepare-template
   ;; extension: template file name extension
   ;; stream: template file contents
-  (fn [extension stream] (some-> extension name .trim .toLowerCase keyword)))
+  (fn [extension stream]
+    (assert (some? extension))
+    (assert (instance? InputStream stream))
+    (some-> extension name .trim .toLowerCase keyword)))
 
 (defmethod prepare-template :default [ext _]
   (throw (ex-info (format "Unrecognized extension: '%s'" ext) {:extension ext})))
@@ -54,6 +57,18 @@
                                   :when (:dynamic? v)]
                               [k (:executable v)]))})))
 
+(defmethod  prepare-template :odt [suffix ^InputStream stream]
+  (println "Running odt file")
+  (let [zip-dir   (FileHelper/createNonexistentTempFile "stencil-" (str suffix ".zip.contents"))]
+    (with-open [zip-stream stream]
+      (ZipHelper/unzipStreamIntoDirectory zip-stream zip-dir))
+    (let [xml-files (for [w (.list zip-dir)
+                          :when (.endsWith (str w) ".xml")] w)
+          execs     (zipmap xml-files (map #(->executable (File. zip-dir (str %))) xml-files))]
+      {:zip-dir    zip-dir
+       :type       :odt
+       :variables  (set (mapcat :variables (vals execs)))
+       :exec-files (into {} (for [[k v] execs :when (:dynamic? v)] [k (:executable v)]))})))
 
 (defn- run-executable-and-return-writer
   "Returns a function that writes output to its output-stream parameter"
@@ -98,6 +113,10 @@
           (println "Zipping exception: " e))))
     {:stream input-stream
      :format :docx}))
+
+(defmethod do-eval-stream :odt [input]
+  (let [m (:docx (methods do-eval-stream))]
+    (assoc (m input) :format :odt)))
 
 (defmethod do-eval-stream :xml [{:keys [template data function] :as input}]
   (assert (:executable template))
