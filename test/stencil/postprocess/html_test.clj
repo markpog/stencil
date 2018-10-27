@@ -1,12 +1,14 @@
 (ns stencil.postprocess.html-test
+  (:import [clojure.lang ExceptionInfo])
   (:require [clojure.test :refer [deftest testing is are]]
             [stencil.ooxml :as ooxml]
             [stencil.postprocess.html :refer :all]))
 
-(defn <p> [& contents] {:tag ooxml/p :content (vec contents)})
-(defn <r> [& contents] {:tag ooxml/r :content (vec contents)})
-(defn <rPr> [& contents] {:tag ooxml/rPr :content (vec contents)})
-(defn <t> [& contents] {:tag ooxml/t :content (vec contents)})
+(defn- <p> [& contents] {:tag ooxml/p :content (vec contents)})
+(defn- <r> [& contents] {:tag ooxml/r :content (vec contents)})
+(defn- <rPr> [& contents] {:tag ooxml/rPr :content (vec contents)})
+(defn- <t> [& contents] {:tag ooxml/t :content (vec contents)})
+(defn- <br> [] {:tag ooxml/br :content []})
 
 (deftest test-ooxml-runs
   (testing "Empty input"
@@ -20,13 +22,34 @@
   (testing "One big formatter")
   (testing "Multiple formatters"))
 
-(deftest asd
+(deftest test-fix-html-chunks-errors
+  (testing "Invalid HTML content"
+    (is (thrown?
+         ExceptionInfo
+         (fix-html-chunks
+          (<p>
+           (<r>
+            (<rPr>)
+            (<t> (->HtmlChunk "<u>Content is not closed."))))))))
+  (testing "Unsupported HTML tag"
+    (is (thrown?
+         ExceptionInfo
+         (fix-html-chunks
+          (<p>
+           (<r>
+            (<rPr>)
+            (<t> (->HtmlChunk "<illegal>rd</illegal>")))))))))
+
+(deftest test-fix-html-chunks
   (testing "Unchanged"
     (= (<p> "Hajdiho") (fix-html-chunks (<p> "Hajdiho"))))
+  (testing "Br tags"
+    (is (= (<p> (<r> (<rPr>) (<t> "One") (<br>) (<t> "Two")))
+           (fix-html-chunks (<p> (<r> (<rPr>) (<t> (->HtmlChunk "One<br>Two"))))))))
   (testing "Complicated case"
     (is (=
          (<p>
-          (<r> (<rPr>) (<t> "Elotte"))
+          (<r> (<rPr>) (<t> "Elotte1") (<t> "Elotte2"))
           (<r> (<rPr>) (<t> "Mr "))
           (<r> (<rPr>) (<t> "E"))
           (<r> (<rPr>
@@ -35,11 +58,13 @@
                (<t> "rd"))
           (<r> (<rPr>) (<t> "os"))
           (<r> (<rPr>) (<t> "E2"))
-          (<r> (<rPr>) (<t> "Utana")))
+          (<r> (<rPr>) (<t> "Utana1") (<t> "Utana2")))
          (fix-html-chunks
           (<p>
            (<r>
             (<rPr>)
-            (<t> "Elotte")
+            (<t> "Elotte1")
+            (<t> "Elotte2")
             (<t> "Mr " (->HtmlChunk "E<u>rd</u>os") "E2")
-            (<t> "Utana"))))))))
+            (<t> "Utana1")
+            (<t> "Utana2"))))))))

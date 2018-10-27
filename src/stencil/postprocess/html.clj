@@ -11,24 +11,45 @@
 (defmethod control? HtmlChunk [x] true)
 (defmethod call-fn "html" [_ content] (->HtmlChunk content))
 
-;; (def legal-tags #{"b" "i" "u" "s" "sup" "sub"})
+(def legal-tags
+  "Set of supported HTML tags"
+  #{:b :em :i :u :s :sup :sub :span :br})
 
-;; throws an exception on invalid xml tags.
-;; (defn- validate-tags [xml-tree])
+(defn- validate-tags
+  "Throws ExceptionInfo on invalid HTML tag in tree"
+  [xml-tree]
+  (->>
+   (fn [node]
+     (if (legal-tags (:tag node))
+       node
+       (throw (ex-info (str "Unexpected HTML tag: " (:tag node)) {:tag (:tag node)}))))
+   (dfs-walk-xml xml-tree map?)))
 
 (defn- parse-html [xml]
-  (doto (xml/parse-str (.replaceAll (str xml) "<br>" "<br/>"))
-    #_(validate-tags)))
-
-;; (defn- color [c] {:tag :w/color :attrs {ooxml/val (str c)}})
+  (-> (str xml)
+      (.replaceAll "<br>" "<br/>")
+      (xml/parse-str)
+      (doto (validate-tags))
+      (try (catch javax.xml.stream.XMLStreamException e
+             (throw (ex-info "Invalid HTML content!" {:raw-xml xml} e))))))
 
 (defn- walk-children [xml]
   (if (map? xml)
-    ;; TODO: imepl
-    (for [c (:content xml)
-          x (walk-children c)]
-      (update x :path conj (:tag xml)))
+    (if (= :br (:tag xml))
+      [{:text ::br}]
+      (for [c (:content xml)
+            x (walk-children c)]
+        (update x :path conj (:tag xml))))
     [{:text xml}]))
+
+(defn- path->styles [path]
+  (cond-> []
+    (some #{:b :em} path) (conj {:tag ooxml/b :attrs {ooxml/val "true"}})
+    (some #{:i} path) (conj {:tag ooxml/i :attrs {ooxml/val "true"}})
+    (some #{:s} path) (conj {:tag ooxml/strike :attrs {ooxml/val "true"}})
+    (some #{:u} path) (conj {:tag ooxml/u :attrs {ooxml/val "single"}})
+    (some #{:sup} path) (conj {:tag ooxml/vertAlign :attrs {ooxml/val "superscript"}})
+    (some #{:sub} path) (conj {:tag ooxml/vertAlign :attrs {ooxml/val "subscript"}})))
 
 (defn html->ooxml-runs
   "Parses html string and returns a seq of ooxml run elements.
@@ -36,30 +57,16 @@
   [html base-style]
   (when (seq html)
     (let [ch (walk-children (parse-html (str "<span>" html "</span>")))]
-      (for [{:keys [text path]} ch]
-        (let [prs (cond-> (set base-style)
-                    (some #{:b :em} path)
-                    (conj {:tag ooxml/b :attrs {ooxml/val "true"}})
+      (for [parts (partition-by :path ch)
+            :let [prs (into (set base-style) (path->styles (:path (first parts))))]]
+        {:tag ooxml/r
+         :content (cons {:tag ooxml/rPr :content (vec prs)}
+                        (for [{:keys [text]} parts]
+                          (if (= ::br text)
+                            {:tag ooxml/br :content []}
+                            {:tag ooxml/t :content [(str text)]})))}))))
 
-                    (some #{:i} path)
-                    (conj {:tag ooxml/i :attrs {ooxml/val "true"}})
-
-                    (some #{:s} path)
-                    (conj {:tag ooxml/strike :attrs {ooxml/val "true"}})
-
-                    (some #{:u} path)
-                    (conj {:tag ooxml/u :attrs {ooxml/val "single"}})
-
-                    (some #{:sup} path)
-                    (conj {:tag ooxml/vertAlign :attrs {ooxml/val "superscript"}})
-
-                    (some #{:sub} path)
-                    (conj {:tag ooxml/vertAlign :attrs {ooxml/val "subscript"}}))]
-          {:tag ooxml/r
-           :content [{:tag ooxml/rPr :content (vec prs)}
-                     {:tag ooxml/t :content [(str text)]}]})))))
-
-(defn fix-html-chunk [chunk-loc]
+(defn- fix-html-chunk [chunk-loc]
   (assert (instance? HtmlChunk (zip/node chunk-loc)))
   (let [lefts (zip/lefts chunk-loc)
         rights (zip/rights chunk-loc)
@@ -74,31 +81,23 @@
         style (some #(when (= ooxml/rPr (:tag %)) %) (:content r))
         ooxml-runs (html->ooxml-runs (:content (zip/node chunk-loc)) (:content style))
 
-        ->t (fn [xs]
-              ;; TODO: kikapcsolni majd!
-              (assert (every? string? xs))
-              {:tag ooxml/t :content (vec xs)})
-        ->run (fn [cts]
-                ;; TODO: kikapcsolni majd
-                (assert (every? map? cts) (str "Not maps" (mapv type cts)))
-                (assoc r :content (vec (cons style cts))))]
+        ->t (fn [xs] {:tag ooxml/t :content (vec xs)})
+        ->run (fn [cts] (assoc r :content (vec (cons style cts))))]
     (assert (= ooxml/t (:tag t)))
     (assert (= ooxml/r (:tag r)))
-    (assert (every? string? lefts) )
-    (assert (every? string? rights))
     (-> chunk-loc
-       (zip/up) ;; t
-       (zip/up) ;; r
+        (zip/up) ;; t
+        (zip/up) ;; r
 
-       (cond-> (seq lefts1) (zip/insert-left (->run lefts1)))
-       (cond-> (seq lefts) (zip/insert-left (->run [(->t lefts)])))
+        (cond-> (seq lefts1) (zip/insert-left (->run lefts1)))
+        (cond-> (seq lefts) (zip/insert-left (->run [(->t lefts)])))
 
-       (cond-> (seq rights1) (zip/insert-right (->run rights1)))
-       (cond-> (seq rights) (zip/insert-right (->run [(->t rights)])))
+        (cond-> (seq rights1) (zip/insert-right (->run rights1)))
+        (cond-> (seq rights) (zip/insert-right (->run [(->t rights)])))
 
+        (as-> * (reduce zip/insert-right * (reverse ooxml-runs)))
 
-       (as-> * (reduce zip/insert-right * (reverse ooxml-runs)))
-       (zip/remove)
-       )))
+        (zip/remove))))
 
-(defn fix-html-chunks [xml-tree] (dfs-walk-xml-node xml-tree #(instance? HtmlChunk %) fix-html-chunk))
+(defn fix-html-chunks [xml-tree]
+  (dfs-walk-xml-node xml-tree #(instance? HtmlChunk %) fix-html-chunk))
