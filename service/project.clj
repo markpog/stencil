@@ -7,6 +7,7 @@
                  [io.github.erdos/stencil-core "0.3.11-SNAPSHOT"]
                  [http-kit "2.5.0"]
                  [org.clojure/tools.logging "1.1.0"]
-                 [ring/ring-json "0.4.0"]]
-  :aot :all
+                 [ring/ring-json "0.4.0"]
+                 [cheshire "5.10.0"]]
+  ; :aot :all
   :main stencil.service.core)
