@@ -1,6 +1,7 @@
 (ns stencil.model.numbering
   (:import [java.io File])
   (:require [clojure.data.xml :as xml]
+            [clojure.walk :refer [postwalk]]
             [clojure.java.io :as io]
             [stencil.ooxml :as ooxml]
             [stencil.util :refer :all]
@@ -12,6 +13,17 @@
 
 
 (def ^:dynamic *numbering* nil)
+
+
+(defn unlazy
+  [coll]
+  (let [unlazy-item (fn [item]
+                      (cond
+                        (sequential? item) (vec item)
+                        (map? item) (into {} item)
+                        :else item))
+        result (postwalk unlazy-item coll)]
+    result))
 
 
 (defn- find-node [tree predicate]
@@ -63,8 +75,9 @@
 (defn- parse [numbering-file]
   (assert numbering-file)
   (with-open [r (io/input-stream (io/file numbering-file))]
-    (let [tree (xml/parse r)]
-      (prepare-numbering-xml tree))))
+    (let [tree (xml/parse r)
+          eager-vals (unlazy tree)]
+      (prepare-numbering-xml eager-vals))))
 
 
 (defn main-numbering [dir main-document main-document-rels]

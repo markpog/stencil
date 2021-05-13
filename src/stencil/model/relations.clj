@@ -1,6 +1,7 @@
 (ns stencil.model.relations
   (:require [clojure.data.xml :as xml]
             [clojure.data.xml.pu-map :as pu]
+            [clojure.walk :refer [postwalk]]
             [clojure.java.io :as io :refer [file]]
             [stencil.ooxml :as ooxml]
             [stencil.util :refer :all]
@@ -20,9 +21,20 @@
   "Relationship type of image files in .rels files."
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image")
 
+(defn unlazy
+  [coll]
+  (let [unlazy-item (fn [item]
+                      (cond
+                        (sequential? item) (vec item)
+                        (map? item) (into {} item)
+                        :else item))
+        result (postwalk unlazy-item coll)]
+    result))
+
 (defn parse [rel-file]
   (with-open [reader (io/input-stream (file rel-file))]
-    (let [parsed (xml/parse reader)]
+    (let [lazy-vals (xml/parse reader)
+          parsed (unlazy lazy-vals)]
       (assert (= tag-relationships (:tag parsed))
               (str "Unexpected tag: " (:tag parsed)))
       (into (sorted-map)
